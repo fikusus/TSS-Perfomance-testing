@@ -9,12 +9,17 @@ import { parseHTML } from "k6/html";
 import { Rate, Counter } from "k6/metrics";
 
 const address = __ENV.HOSTNAME || "http://localhost:7000";
-const stages = (__ENV.TYPE === "Multiple")?  [{ target: 50, duration: "2m" }] : [{ target: 1, duration: "30s" }];
+const stages =
+  __ENV.TYPE === "Multiple"
+    ? [{ target: 50, duration: "2m" }]
+    : [{ target: 1, duration: "30s" }];
 
 let ErrorCount = new Counter("errors");
 let ErrorRate = new Rate("error_rate");
 
 const defaultPassword = "Testing9874!";
+const pointName = "somePointName"
+
 
 const headers = {
   "sec-ch-ua":
@@ -32,8 +37,47 @@ const headers = {
   "accept-language": "ru-UA,ru-RU;q=0.9,ru;q=0.8,en-US;q=0.7,en;q=0.6",
 };
 
+const checkProfilePage = (response) => {
+  let res = response.status === 200;
+  res = res && response.body.includes("User Preset");
+  res = res && response.body.includes("API's keys");
+  res = res && response.body.includes("Database user");
+  return res;
+};
+
+const checkDashboardPage = (response) => {
+  let res = response.status === 200;
+  res = res && response.body.includes("Total Space");
+  res = res && response.body.includes("Bases");
+  res = res && response.body.includes("Databases");
+  return res;
+};
+
+const checkDatabasePage = (response, dbName) => {
+  let res = response.status === 200;
+  res = res && response.body.includes(dbName);
+  res =
+    res &&
+    response.body.includes(
+      "Investigate your database. Look to your data from browser."
+    );
+  res =
+    res &&
+    response.body.includes("Seed yor database with your or shared scripts");
+  return res;
+};
+
+const checkPointPage = (response, dbName) => {
+  let res = response.status === 200;
+  res = res && response.body.includes(dbName);
+  res = res && response.body.includes("Backup");
+  res = res && response.body.includes("New backup");
+  res = res && response.body.includes("Create new backup");
+  return res;
+};
+
 export const options = {
-  stages
+  stages,
 };
 
 export default function main() {
@@ -66,7 +110,8 @@ export default function main() {
       { headers }
     );
     success = check(response, {
-      "Fill in the registration fields": (r) => r.status === 200,
+      "Fill in the registration fields": (r) =>
+        r.status === 200 && r.body.includes(login),
     });
     if (!success) {
       ErrorCount.add(1);
@@ -80,7 +125,11 @@ export default function main() {
     response = http.get(`${address}/profile`, { headers });
 
     success = check(response, {
-      "Load profile page": (r) => r.status === 200,
+      "Load profile page": (r) => {
+        let res = checkProfilePage(r);
+        res = res && !response.body.includes("It's your");
+        return res;
+      },
     });
     if (!success) {
       ErrorCount.add(1);
@@ -98,9 +147,12 @@ export default function main() {
       },
       { headers }
     );
-
     success = check(response, {
-      "Upgrade user": (r) => r.status === 200,
+      "Upgrade user": (r) => {
+        let res = checkProfilePage(r);
+        res = res && response.body.includes("It's your");
+        return res;
+      },
     });
     if (!success) {
       ErrorCount.add(1);
@@ -112,9 +164,8 @@ export default function main() {
 
   group(`go-to-dashboard - ${address}`, function () {
     response = http.get(`${address}`, { headers });
-
     success = check(response, {
-      "Load dashboard page": (r) => r.status === 200,
+      "Load dashboard page": (r) => checkDashboardPage(r),
     });
     if (!success) {
       ErrorCount.add(1);
@@ -128,14 +179,14 @@ export default function main() {
     response = http.post(
       `${address}/database`,
       {
-        _csrf:
-          "_csrf",
+        _csrf: "_csrf",
       },
       { headers }
     );
 
     success = check(response, {
-      "Create database": (r) => r.status === 200,
+      "Create database": (r) =>
+        r.status === 200 && r.body.includes("Database created"),
     });
     if (!success) {
       ErrorCount.add(1);
@@ -149,7 +200,7 @@ export default function main() {
     response = http.get(`${address}/profile`, { headers });
 
     success = check(response, {
-      "Load profile page 2": (r) => r.status === 200,
+      "Load profile page 2": (r) => checkProfilePage(r),
     });
     if (!success) {
       ErrorCount.add(1);
@@ -163,7 +214,7 @@ export default function main() {
     response = http.get(`${address}`, { headers });
 
     success = check(response, {
-      "Load home page": (r) => r.status === 200,
+      "Load home page": (r) => checkDashboardPage(r),
     });
     if (!success) {
       ErrorCount.add(1);
@@ -177,35 +228,31 @@ export default function main() {
   const doc = parseHTML(res.body);
   const databaseName = doc.find("h6").text().trim();
 
-  group(
-    `go-to-database - ${address}/database/${databaseName}`,
-    function () {
-      response = http.get(`${address}/database/${databaseName}`, {
-        headers,
-      });
+  group(`go-to-database - ${address}/database/${databaseName}`, function () {
+    response = http.get(`${address}/database/${databaseName}`, {
+      headers,
+    });
 
-      success = check(response, {
-        "Load database page": (r) => r.status === 200,
-      });
-      if (!success) {
-        ErrorCount.add(1);
-        ErrorRate.add(true);
-      } else {
-        ErrorRate.add(false);
-      }
+    success = check(response, {
+      "Load database page": (r) => checkDatabasePage(r, databaseName),
+    });
+    if (!success) {
+      ErrorCount.add(1);
+      ErrorRate.add(true);
+    } else {
+      ErrorRate.add(false);
     }
-  );
+  });
 
   group(
     `go-to-backups - ${address}/database/${databaseName}/point`,
     function () {
-      response = http.get(
-        `${address}/database/${databaseName}/point`,
-        { headers }
-      );
+      response = http.get(`${address}/database/${databaseName}/point`, {
+        headers,
+      });
 
       success = check(response, {
-        "Load backups page": (r) => r.status === 200,
+        "Load backups page": (r) => checkPointPage(r, databaseName),
       });
       if (!success) {
         ErrorCount.add(1);
@@ -222,16 +269,16 @@ export default function main() {
       response = http.post(
         `${address}/database/${databaseName}/point/`,
         {
-          _csrf:
-            "_csrf",
-          point: "test",
+          _csrf: "_csrf",
+          point: pointName,
         },
         { headers }
       );
 
       success = check(response, {
-        "Create new point": (r) => r.status === 200,
-        "Verify point name is test": (r) => r.body.includes("test"),
+        "Create new point": (r) =>
+          r.status === 200 && r.body.includes("Backup created successfully"),
+        "Verify point name is test": (r) => r.body.includes(pointName),
       });
       if (!success) {
         ErrorCount.add(1);
@@ -245,13 +292,15 @@ export default function main() {
   group(
     `create-table-sql - ${address}0/database/${databaseName}/sql`,
     function () {
-      response = http.get(
-        `${address}/database/${databaseName}/sql`,
-        { headers }
-      );
+      response = http.get(`${address}/database/${databaseName}/sql`, {
+        headers,
+      });
 
       success = check(response, {
-        "Load sql page": (r) => r.status === 200,
+        "Load sql page": (r) =>
+          r.status === 200 &&
+          r.body.includes("to run current query.") &&
+          r.body.includes("to run all query."),
       });
       if (!success) {
         ErrorCount.add(1);
@@ -263,13 +312,14 @@ export default function main() {
       response = http.post(
         `${address}/database/${databaseName}/sql`,
         {
-          query: "CREATE TABLE test (name varchar(20), value int);",
+          query: "CREATE TABLE test (col_name varchar(20), col_value int);",
         },
         { headers }
       );
 
       success = check(response, {
-        "Create table test": (r) => r.status === 200,
+        "Create table test": (r) =>
+          r.status === 200 && r.body.includes("DDL/DML performed"),
       });
       if (!success) {
         ErrorCount.add(1);
@@ -287,7 +337,8 @@ export default function main() {
       );
 
       success = check(response, {
-        "Insert into test 1": (r) => r.status === 200,
+        "Insert into test 1": (r) =>
+          r.status === 200 && r.body.includes("DDL/DML performed Changed: 1"),
       });
       if (!success) {
         ErrorCount.add(1);
@@ -305,7 +356,8 @@ export default function main() {
       );
 
       success = check(response, {
-        "Insert into test 2": (r) => r.status === 200,
+        "Insert into test 2": (r) =>
+          r.status === 200 && r.body.includes("DDL/DML performed Changed: 1"),
       });
       if (!success) {
         ErrorCount.add(1);
@@ -324,7 +376,7 @@ export default function main() {
       });
 
       success = check(response, {
-        "Load database page 2": (r) => r.status === 200,
+        "Load database page 2": (r) => checkDatabasePage(r, databaseName),
       });
       if (!success) {
         ErrorCount.add(1);
@@ -338,13 +390,12 @@ export default function main() {
   group(
     `go-to-tables - ${address}/database/${databaseName}/table`,
     function () {
-      response = http.get(
-        `${address}/database/${databaseName}/table`,
-        { headers }
-      );
+      response = http.get(`${address}/database/${databaseName}/table`, {
+        headers,
+      });
 
       success = check(response, {
-        "Load tables page": (r) => r.status === 200,
+        "Load tables page": (r) => r.status === 200 && r.body.includes("Table name"),
         "Verify table name is test": (r) => r.body.includes("test"),
       });
       if (!success) {
@@ -359,14 +410,13 @@ export default function main() {
   group(
     `go-to-table - ${address}/database/${databaseName}/table/test`,
     function () {
-      response = http.get(
-        `${address}/database/${databaseName}/table/test`,
-        { headers }
-      );
-
+      response = http.get(`${address}/database/${databaseName}/table/test`, {
+        headers,
+      });
       success = check(response, {
         "Load table test page": (r) => r.status === 200,
-        "Verify first column name is first": (r) => r.body.includes("#"),
+        "Verify columns name": (r) => r.body.includes("col_name") && r.body.includes("col_value"),
+        "Verify columns values": (r) => r.body.includes("test1") && r.body.includes("test2"),
       });
       if (!success) {
         ErrorCount.add(1);
@@ -385,26 +435,7 @@ export default function main() {
       });
 
       success = check(response, {
-        "Load database page 3": (r) => r.status === 200,
-      });
-      if (!success) {
-        ErrorCount.add(1);
-        ErrorRate.add(true);
-      } else {
-        ErrorRate.add(false);
-      }
-    }
-  );
-
-  group(
-    `reset-point - ${address}/database/${databaseName}/point`,
-    function () {
-      response = http.get(
-        `${address}/database/${databaseName}/point`,
-        { headers }
-      );
-      success = check(response, {
-        "Reset new point": (r) => r.status === 200,
+        "Load database page 3": (r) =>checkDatabasePage(r, databaseName),
       });
       if (!success) {
         ErrorCount.add(1);
